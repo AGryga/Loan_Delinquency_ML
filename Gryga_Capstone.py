@@ -2,11 +2,19 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.utils import resample
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score, KFold, GridSearchCV
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_selection import SelectFromModel
+from sklearn import metrics
+from sklearn.metrics import classification_report
+import xgboost as xgb
+from xgboost import plot_importance
+from matplotlib import rcParams
+rcParams.update({'figure.autolayout': True})
 
 #Dataset can be found at
 #https://www.kaggle.com/mishra5001/credit-card#application_data.csv
@@ -17,7 +25,6 @@ from sklearn.model_selection import train_test_split
 #Redirect file path to application data & previous application data CSVs on your machine.
 current_applicants = pd.read_csv('C:/Users/rockn/OneDrive/Desktop/application_data.csv')
 previous_applications = pd.read_csv('C:/Users/rockn/OneDrive/Desktop/previous_application.csv')
-
 
 
 #------------------------------------------
@@ -117,7 +124,6 @@ plt.show()
 #Overview of previous loan application.
 application_overview = full_dataset[['TOTAL_APPLIED', 'APPROVED_COUNT', 'REJECTED_COUNT']]
 
-fig, axes = plt.subplots()
 application_overview.hist(figsize = [12,12], bins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20])
 plt.xticks(ticks = [0, 2, 4, 6, 8, 10, 15, 20])
 plt.xlabel([0, 2, 4, 6, 8, 10, 15, 20])
@@ -132,6 +138,7 @@ credit_inquiries = full_dataset[['AMT_REQ_CREDIT_BUREAU_HOUR', 'AMT_REQ_CREDIT_B
 'AMT_REQ_CREDIT_BUREAU_WEEK', 'AMT_REQ_CREDIT_BUREAU_MON', 'AMT_REQ_CREDIT_BUREAU_QRT', 'AMT_REQ_CREDIT_BUREAU_YEAR']]
 credit_inquiries.hist(figsize = [12,12], bins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20])
 plt.suptitle('Credit bureau inqury feature distribution', fontsize = 18)
+plt.xlabel('Number of Credit Inquiries')
 #plt.savefig('Credit_Inquiries.png', quality = 95)
 plt.show()
 
@@ -259,10 +266,6 @@ plt.show()
 print("""We see that 10 features represent around 40% of the variance of the model. 
 The incremental 10 components add about 15% more cumulative variance""")
 
-#principalComponents = pca.fit_transform(normalized_full_dataset)
-#print(pca.explained_variance_ratio_)
-
-
 #Uncomment to export cleaned dataset
 #full_dataset.to_csv('Full_Dataset.csv')
 
@@ -273,36 +276,214 @@ The incremental 10 components add about 15% more cumulative variance""")
 #------------------------------------------
 #---          Machine Learning          ---
 #------------------------------------------
-#Gathers datasets to be fed into the train_test_split function. X contains all non-target features. Y contains the target features.
+#Gathers datasets to be fed into the train_test_split function after resampling.
+#X contains all non-target features. Y contains the target features.
 X = pd.DataFrame(StandardScaler().fit_transform(full_dataset_na_filled), columns = full_dataset_na_filled.columns)
 y = full_dataset['TARGET']
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, stratify = y, random_state = 123)
-
 #Look to resample the minority class (1's) to be even with the majority class (0's). 
-#Need to resample to around 226,000 records for the minority class. Currently at 19,860 based on splitting the training data
-y_train.value_counts()
+#With the dataset being unbalanced(282,686 0's and 24,825 1's), the data needs to be resampled, oversampling the minority class
+y.value_counts()
 
-#Should I combine the X & y to be one full dataset, resample and then resplit into X & y?
+#Recreate full dataframe for just the minority class (target feature + all subsequent features)
+#This minority class dataframe will then be resampled to create a 50/50 proportion for the training & test data
+y_minority = pd.DataFrame(y[y == 1])
+minority_dataset = y_minority.merge(X, left_index = True, right_index = True)
 
-#Recreate full dataframe for just minority class (target feature + all subsequent features)
-y_train_minority = pd.DataFrame(y_train[y_train == 1])
-full_training_minority_dataset = y_train_minority.merge(X_train, left_index = True, right_index = True)
+#Resamples the minority dataset, bringing the proportion of majority : minority classes to equilibrium
+resampled_minority_dataset = resample(minority_dataset, replace = True, n_samples = 282686, random_state = 123)
 
-#Increase training data sample set for the minority class through resampling to oversample the minority class in the model training.
-full_train_minority_resampled = resample(full_training_minority_dataset, replace = True, n_samples = 226000, random_state = 123)
-#full_train_minority_resampled.to_csv('Resampled_Minority_Class.csv')
+#Recreate the unaltered majority class dataframe.
+y_majority = pd.DataFrame(y[y == 0])
+majority_dataset = y_majority.merge(X, left_index = True, right_index = True)
 
-#Recreate the majority class, bringing together the resampled minority class & unaltered majority class. This new dataframe contains a 50/50 proportion of the target feature classes
-y_train_majority = pd.DataFrame(y_train[y_train == 0])
-full_train_majority = y_train_majority.merge(X_train, left_index = True, right_index = True)
+#Concatenates the resampled minority class & unaltered majority class
+#This new dataframe contains a 50/50 proportion of the target feature classes
+full_dataset_resampled = pd.concat([majority_dataset, resampled_minority_dataset])
 
-#Concatenates the two target class dataframes together.
-full_training_data_resampled = pd.concat([full_train_majority, full_train_minority_resampled])
+#Following the oversampling of the minority class, the data is returned back 
+# into the X and y dataframes for training and testing splits
+X = full_dataset_resampled.iloc[:, 1:]
+y = full_dataset_resampled.iloc[:, 0]
 
-#Following the oversampling of the minority class, the data is returned back into the X_train and y_train format to develop and train the models
-X_train = full_training_data_resampled.iloc[:, 1:]
-y_train = full_training_data_resampled.iloc[:, 0]
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, stratify = y, random_state = 123)
+kfold = KFold(n_splits = 5, random_state = 7)
+
+#    Logistic Regression   
+print('\n Logistic regression model - Features Selected')
+
+#Use SelectFromModel to identify key features utilized by the Logistical Regression model
+#Class weight is balanced as the dataset contains a 50/50 proportion of classes
+log_reg = SelectFromModel(LogisticRegression(class_weight = "balanced", random_state = 123))
+log_reg.fit(X_train, y_train)
+
+#Identify the features selected as drivers within the model. Reshape the X_train dataset to contain those 6 key features
+log_selected_features = X_train.columns[(log_reg.get_support())].tolist()
+X_train_log_selected = X_train[X_train.columns.intersection(log_selected_features)]
+
+print(log_selected_features)
+
+#Plot feature importance
+pd.Series(pd.to_numeric(log_reg.estimator_.coef_.tolist()[0]), index=X_train.columns).plot.bar(color='skyblue', figsize=(12, 12))
+plt.title('Logistic Regression Feature Importance')
+plt.ylabel('Feature Importance', fontsize = 12)
+#plt.savefig('LogReg_Importance.png', quality=95, bbox_inches = 'tight')
+plt.show()
+
+#Utilize GridSearchCV to finetune and identify optimal parameters. 
+#Used to identify the best options for the regularization type and learning rate originally.
+#param_grid = {"penalty": ["l1", "l2"], "C": [0.001, 0.005, 0.05, 0.1]}
+
+log_param_grid = {"penalty": ["l1"], "C": [0.1]}
+logistic_reg = GridSearchCV(LogisticRegression(class_weight = "balanced", random_state = 123), 
+                                                log_param_grid, n_jobs = -1, refit = True, scoring="roc_auc")
+
+logistic_reg.fit(X_train_log_selected, y_train)
+
+print(f'Best score: {logistic_reg.best_score_} with param: {logistic_reg.best_params_}')
+
+X_test_log_selected = X_test[X_test.columns.intersection(log_selected_features)]
+y_log_predictions = logistic_reg.predict(X_test_log_selected)
+
+conf_matrix = metrics.confusion_matrix(y_test, y_log_predictions)
+sns.heatmap(pd.DataFrame(conf_matrix), annot=True, fmt = 'g', cmap = 'coolwarm_r')
+plt.title('Logisitic Regression')
+plt.ylabel('Actual label')
+plt.xlabel('Predicted label')
+#plt.savefig('LogReg_CM.png', quality = 95)
+plt.show()
+
+print(f"Accuracy: {metrics.accuracy_score(y_test, y_log_predictions)}")
+print(classification_report(y_test, y_log_predictions))
+
+y_pred_prob = logistic_reg.predict_proba(X_test_log_selected)[::,1]
+fpr, tpr, _ = metrics.roc_curve(y_test,  y_pred_prob)
+auc = metrics.roc_auc_score(y_test, y_pred_prob)
+plt.plot(fpr,tpr)
+plt.title(f'Logistic Regression - Area Under Curve : {str(auc)[:4]}')
+plt.ylabel('True Positive Rate')
+plt.xlabel('False Positive Rate')
+#plt.savefig('LogReg_AUC.png',quality = 95)
+plt.show()
+
+print(f'Area Under Curve : {auc}')
+
+#    Random Forests
+print('\n Random Forest model')
+# rf_param_grid = {'n_estimators': [100, 200, 300, 400], 'max_features': ['auto', 'sqrt', 'log2'], 
+#                 'max_depth' : [5, 10, 15, 20],'criterion' :['gini', 'entropy']}
+
+rf_param_grid = {'n_estimators': [400], 'max_features': ['auto'], 
+                'max_depth' : [20], 'criterion' :['gini']}
+
+random_forest =  SelectFromModel(RandomForestClassifier(class_weight = "balanced", random_state = 123))
+random_forest = random_forest.fit(X_train, y_train)
+
+
+rf_selected_features = X_train.columns[(random_forest.get_support())].tolist()
+X_train_rf_selected = X_train[X_train.columns.intersection(rf_selected_features)]
+print(rf_selected_features)
+
+#Plot feature importance
+pd.Series(pd.to_numeric(random_forest.estimator_.feature_importances_), index=X_train.columns).plot.bar(color='skyblue', figsize=(12, 12))
+plt.title('Random Forest Feature Importance  - Features Selected')
+plt.ylabel('Feature Importance', fontsize = 12)
+#plt.savefig('RF_Feat_Importance.png', quality = 95, bbox_inches = 'tight')
+plt.show()
+
+random_forest = GridSearchCV(RandomForestClassifier(class_weight = "balanced", random_state = 123), 
+                                                rf_param_grid, cv = kfold, n_jobs = -1, refit = True, scoring = "roc_auc")
+
+random_forest.fit(X_train_rf_selected, y_train)
+
+print(f'Best score: {random_forest.best_score_} with param: {random_forest.best_params_}')
+
+X_test_rf_selected = X_test[X_test.columns.intersection(rf_selected_features)]
+y_rf_predictions = random_forest.predict(X_test_rf_selected)
+
+conf_matrix = metrics.confusion_matrix(y_test, y_rf_predictions)
+sns.heatmap(pd.DataFrame(conf_matrix), annot=True, fmt = 'g', cmap = 'coolwarm_r')
+plt.title('Random Forests')
+plt.ylabel('Actual label')
+plt.xlabel('Predicted label')
+#plt.savefig('RF_CM.png', quality=95)
+plt.show()
+
+print(f"Accuracy: {metrics.accuracy_score(y_test, y_rf_predictions)}")
+print(classification_report(y_test, y_rf_predictions))
+
+y_pred_prob_rf = random_forest.predict_proba(X_test_rf_selected)[::,1]
+fpr, tpr, _ = metrics.roc_curve(y_test,  y_pred_prob_rf)
+auc = metrics.roc_auc_score(y_test, y_pred_prob_rf)
+plt.plot(fpr,tpr)
+plt.title(f'Random Forests - Area Under Curve : {str(auc)[:4]}')
+plt.ylabel('True Positive Rate')
+plt.xlabel('False Positive Rate')
+#plt.savefig('RF_AUC.png', quality = 95)
+plt.show()
+
+print(f'Area Under Curve : {auc}')
+
+
+#    Boosted Trees
+print('\n Gradient Boosted Trees model')
+data_dmatrix = xgb.DMatrix(data = X_train, label = y_train)
+
+# gbt_param_grid = {'n_estimators' : [100, 200, 300, 400], 'max_depth' : [5, 10, 15, 20], learning_rate' : [0.01, 0.05, 0.1, 1]}
+
+gbt_param_grid = {'n_estimators' : [400], 'max_depth' : [20], 'learning_rate' : [0.1]}
+                    
+xgb_class = xgb.XGBClassifier(seed = 123)
+
+#Use the function below to retrieve a chart of feature importance for boosted tree models.
+#Needed to be in a function as it can't work alongside the GridSearchCV function
+def boosted_trees_ft_importance(xgb_class):
+    xgb_class.fit(X_train, y_train)
+
+    pd.Series(pd.to_numeric(xgb_class.feature_importances_), index=X_train.columns).plot.bar(color='skyblue', figsize=(12, 12))
+    plt.title('Boosted Trees Feature Importance  - Features Selected')
+    plt.ylabel('Feature Importance', fontsize = 12)
+    #plt.savefig('GBT_Feat_Importance.png', quality = 95, bbox_inches = 'tight')
+    plt.show()
+
+#boosted_trees_ft_importance(xgb_class)
+
+gbt = GridSearchCV(xgb_class, gbt_param_grid, cv=kfold, n_jobs = 2, scoring='roc_auc')
+
+gbt.fit(X_train, y_train)
+
+print(f'Best score: {gbt.best_score_} with param: {gbt.best_params_}')
+
+# Perform K-Fold Cross Validation
+#results = cross_val_score(gbt, X_train, y_train, cv=kfold, n_jobs = -1)
+
+y_pred_gbt = gbt.predict(X_test)
+
+conf_matrix = metrics.confusion_matrix(y_test, y_pred_gbt)
+sns.heatmap(pd.DataFrame(conf_matrix), annot=True, fmt = 'g', cmap = 'coolwarm_r')
+plt.title('Gradient Boosted Trees')
+plt.ylabel('Actual label')
+plt.xlabel('Predicted label')
+plt.savefig('XGB_CM.png',quality = 95)
+plt.show()
+
+print(f"Accuracy: {metrics.accuracy_score(y_test, y_pred_gbt)}")
+print(classification_report(y_test, y_pred_gbt))
+
+y_pred_prob_gbt = gbt.predict_proba(X_test)[::,1]
+fpr, tpr, _ = metrics.roc_curve(y_test,  y_pred_prob_gbt)
+auc = metrics.roc_auc_score(y_test, y_pred_prob_gbt)
+plt.plot(fpr, tpr)
+plt.title(f'Boosted Trees - Area Under Curve : {str(auc)[:4]}')
+plt.ylabel('True Positive Rate')
+plt.xlabel('False Positive Rate')
+plt.savefig('XGB_AUC.png', quality = 95)
+plt.show()
+
+print(f'Area Under Curve : {auc}')
+
+
+plot_tree(gbt)
 
 def cross_tabs(df):
     #Uses list comphrension drop all FLAG_DOCUMENT_INT columns for descriptive statistics
@@ -330,6 +511,74 @@ def cross_tabs(df):
     gender = pd.crosstab(index = df['CODE_GENDER'], columns = 'Count')
     gender
 
+def logreg_no_ft_selection():
+    print('\n Logistic regression model - No Features Selected')
+
+    log_reg = LogisticRegression(class_weight = "balanced", penalty = 'l1', random_state = 123, n_jobs = -1)
+    log_reg.fit(X_train, y_train)
+
+    y_log_predictions = log_reg.predict(X_test)
+
+    conf_matrix = metrics.confusion_matrix(y_test, y_log_predictions)
+    sns.heatmap(pd.DataFrame(conf_matrix), annot=True, fmt = 'g', cmap = 'coolwarm_r')
+    plt.title('Logisitic Regression - No Feature Selection')
+    plt.ylabel('Actual label')
+    plt.xlabel('Predicted label')
+    #plt.savefig('LogReg_CM_No_Slct.png', quality = 95)
+    plt.show()
+
+    print(f"Accuracy: {metrics.accuracy_score(y_test, y_log_predictions)}")
+    print(classification_report(y_test, y_log_predictions))
+
+    y_pred_prob = log_reg.predict_proba(X_test)[::,1]
+    fpr, tpr, _ = metrics.roc_curve(y_test,  y_pred_prob)
+    auc = metrics.roc_auc_score(y_test, y_pred_prob)
+    plt.plot(fpr,tpr)
+    plt.title(f'Logistic Regression No Feature Selection \n Area Under Curve : {str(auc)[:4]}')
+    plt.ylabel('True Positive Rate')
+    plt.xlabel('False Positive Rate')
+    #plt.savefig('LogReg_AUC_No_Slct.png',quality = 95)
+    plt.show()
+
+    print(f'Area Under Curve : {auc}')
+
+def random_forest_no_ft_selection():
+    print('\n Random Forest model - No Features Selected')
+
+    random_forest = RandomForestClassifier(class_weight = "balanced", criterion='gini', 
+                                        n_estimators= 400, max_features= 'auto', max_depth=20,
+                                        random_state = 123)
+
+    random_forest.fit(X_train, y_train)
+
+    y_rf_predictions = random_forest.predict(X_test)
+
+    conf_matrix = metrics.confusion_matrix(y_test, y_rf_predictions)
+    sns.heatmap(pd.DataFrame(conf_matrix), annot=True, fmt = 'g', cmap = 'coolwarm_r')
+    plt.title('Random Forests - No Feature Selection')
+    plt.ylabel('Actual label')
+    plt.xlabel('Predicted label')
+    plt.savefig('RF_CM_No_FT_Select.png', quality=95)
+    plt.show()
+
+    print(f"Accuracy: {metrics.accuracy_score(y_test, y_rf_predictions)}")
+    print(classification_report(y_test, y_rf_predictions))
+
+    y_pred_prob_rf = random_forest.predict_proba(X_test)[::,1]
+    fpr, tpr, _ = metrics.roc_curve(y_test,  y_pred_prob_rf)
+    auc = metrics.roc_auc_score(y_test, y_pred_prob_rf)
+    plt.plot(fpr,tpr)
+    plt.title(f'Random Forests No Feature Selection \n Area Under Curve : {str(auc)[:4]}')
+    plt.ylabel('True Positive Rate')
+    plt.xlabel('False Positive Rate')
+    plt.savefig('RF_AUC_NoFT_Select.png', quality = 95)
+    plt.show()
+
+    print(f'Area Under Curve : {auc}')
+
+
+#logreg_no_ft_selection()
+#random_forest_no_ft_selection()
 
 
 
