@@ -371,7 +371,7 @@ print(f'Area Under Curve : {auc}')
 #    Random Forests
 print('\n Random Forest model')
 # rf_param_grid = {'n_estimators': [100, 200, 300, 400], 'max_features': ['auto', 'sqrt', 'log2'], 
-#                 'max_depth' : [5, 10, 15, 20],'criterion' :['gini', 'entropy']}
+#                 'max_depth' : [5, 10, 15, 20],'criterion' : ['gini', 'entropy']}
 
 rf_param_grid = {'n_estimators': [400], 'max_features': ['auto'], 
                 'max_depth' : [20], 'criterion' :['gini']}
@@ -412,7 +412,7 @@ plt.show()
 print(f"Accuracy: {metrics.accuracy_score(y_test, y_rf_predictions)}")
 print(classification_report(y_test, y_rf_predictions))
 
-y_pred_prob_rf = random_forest.predict_proba(X_test_rf_selected)[::,1]
+y_pred_prob_rf = random_forest.predict_proba(X_test_rf_selected)[::, 1]
 fpr, tpr, _ = metrics.roc_curve(y_test,  y_pred_prob_rf)
 auc = metrics.roc_auc_score(y_test, y_pred_prob_rf)
 plt.plot(fpr,tpr)
